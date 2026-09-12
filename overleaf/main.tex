@@ -1,0 +1,70 @@
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}
+
+\IEEEoverridecommandlockouts                      
+
+\overrideIEEEmargins 
+
+%In case you encounter the following error:
+%Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+%Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+%This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with Acrobat Reader
+%Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+%\pdfobjcompresslevel=0
+%\pdfminorversion=4
+
+% See the \addtolength command later in the file to balance the column lengths
+% on the last page of the document
+
+% The following packages can be found on http:\\www.ctan.org
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{mathtools}
+\usepackage{hyperref}
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+% \algnewcommand{\StepComment}[1]{\Statex \(\triangleright\)~#1}
+
+\title{\LARGE \bf Multi-Agent Coordination-Based Distributed Online Optimization for Floating Offshore Wind Farm Control$^{*}$}
+
+
+\author{Zekai Chen$^{1}$, Cyrus Neary$^{2}$, and Ryozo Nagamune$^{1}$% <-this % stops a space
+\thanks{*This work was supported by the Natural Sciences and Engineering
+Research Council of Canada (NSERC) and University of British Columbia Four Year Doctoral Fellowship (4YF).}% <-this % stops a space
+\thanks{$^{1}$Zekai Chen and Ryozo Nagamune are with the Department of Mechanical Engineering, the University of British Columbia, Vancouver, BC V6T 1Z4, Canada {\tt\small zkaichen@student.ubc.ca, nagamune@mech.ubc.ca}}%
+\thanks{$^{2}$Cyrus Neary is with the Department of Electrical and Computer Engineering, the University of British Columbia, Vancouver, BC V6T 1Z4, Canada {\tt\small cyrus.neary@ubc.ca}}}%
+
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\pagestyle{empty}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{abstract}
+This is the abstract.
+\end{abstract}
+
+% \textbf{Keywords:}
+% Wind Farm Control
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\input{overleaf/1introduction}
+\input{overleaf/2problem}
+\input{overleaf/3method}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section*{ACKNOWLEDGMENT}
+DeepSeek V4 Pro large language model~\cite{deepseek} is used for editing the paper.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\bibliographystyle{IEEEtran}
+\bibliography{ref}
+
+\end{document}

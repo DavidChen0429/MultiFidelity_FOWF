@@ -1,0 +1,38 @@
+\section{Wind Farm Control Problem} \label{sec:problem}
+In this section, we first list the assumptions and definitions. Then, we formulate the problem.
+
+\subsection{Assumptions and Definitions} \label{sec:definition}
+Consider a wind farm with $N$ floating offshore wind turbines (FOWTs), where $[N]:=\{1,2,\dots,N\}$ denotes the index set. Assume that each FOWT is equipped with sensors that provide measurements of yaw angle ($\gamma$), platform surge ($dx$) and sway ($dy$) motions, power output ($P$), and wind conditions ($v$). Let $k$ denote the discrete time step.
+
+Following previous work on turbine repositioning, the control input of each FOWT$_n$ is the nacelle yaw angle at time step $k$, denoted by $\gamma_{n,k}$. To enable distributed control, we define the neighbor set $\mathcal{N}_n$ of FOWT$_n$ as the set of turbines whose wakes aerodynamically influence FOWT$_n$. Thus, the specific members of $\mathcal{N}_n$ depend on the wind farm layout and the indexing of the turbines. For simplicity, we denote the neighboring turbines by $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$.
+
+The objective of wind farm control is to improve farm-level performance by mitigating wake effects. For turbine repositioning, moving turbines out of the wake not only increases power capture but also tends to reduce structural loading, since the wake is a source of both power loss and increased loads. Therefore, the goal of mitigating wake effects is closely coupled to increasing power capture, and the cost function is defined accordingly. Let $P_n^{\text{rate}}$ denote the rated power output of FOWT$_n$, and let $P_{n,k}^{\text{real}}$ denote its actual power output at time step $k$. The local cost of FOWT$_n$ is defined as
+\begin{equation} \label{eq:cost_def}
+    f_{n,k} = - \frac{P_{n,k}^{\text{real}}}{P_n^{\text{rate}}} .
+\end{equation}
+
+Since FOWT$_n$ and its neighbors $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$ are aerodynamically coupled, $f_{n,k}$ depends on both $\gamma_{n,k}$ and the yaw angles of its neighbors. Accordingly, the local cost of FOWT$_n$ can be written as $f_{n,k}\!\left(\gamma_{n,k}, \{\gamma_{m,k}\}_{m \in \mathcal{N}_n}\right)$. The farm-level cost is then defined as the sum of the local costs:
+\begin{equation} \label{eq:cost_sum}
+    f_k(\Gamma_k) = \sum_{n=1}^N f_{n,k}\!\left(\gamma_{n,k}, \{\gamma_{m,k}\}_{m \in \mathcal{N}_n}\right),
+\end{equation}
+where $\Gamma_k = (\gamma_{1,k}, \gamma_{2,k}, \dots, \gamma_{N,k})$ denotes the vector of yaw angles of all turbines at time step $k$. According to \eqref{eq:cost_def}, $f_{n,k}$ decreases as the power output of FOWT$_n$ increases. Therefore, minimizing $f_k(\Gamma_k)$ is equivalent to maximizing the total normalized power output of the wind farm, thereby improving farm-level performance.
+
+\subsection{Problem Formulation}
+Based on the above definition, we formulate the problem under a multi-agent coordination-based distributed online optimization framework: at each time step $k \geq 1$, FOWT$_n$ makes a control action $\gamma_{n,k}$ based on information of its own and $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$, which includes $f_{n,\ell}, \gamma_{m,\ell}, \gamma_{n,\ell}$ with $\ell\leq k-1$. Subsequently, the environment reveals $f_{n,k}\!\left(\gamma_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right)$. Each turbine then shares its information with its neighbor, and the process repeats at every time step until a pre-specified horizon $T>0$ is reached. Figure~\ref{fig:BD} shows the corresponding block diagram. 
+
+\begin{figure}[h!]
+    \centering
+    \includegraphics[width=\linewidth]{overleaf/figures/BD.png}
+    \caption{Block diagram showing the architecture of the designed distributed online optimization-based control system.}
+    \label{fig:BD}
+\end{figure}
+
+Assume the maximum yaw angle is denoted by $\gamma_{\max}$ and let $X_n=\{\gamma : |\gamma| \le \gamma_{\max}\}$ denote the feasible set of FOWT$_n$. Therefore, the corresponding objective of the problem is to minimize the following cumulative cost:
+\begin{equation} \label{eq:opti2}
+\begin{aligned}
+    \min_{\substack{\gamma_{n,k} \\ n\in[N]}} \quad
+    & \sum_{k=1}^{T}\sum_{n=1}^{N} f_{n,k}\!\left(\gamma_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right) \\
+    \text{s.t.}\quad
+    & \gamma_{n,k} \in X_n, \quad \forall n\in[N],\; \forall k.
+\end{aligned}
+\end{equation}

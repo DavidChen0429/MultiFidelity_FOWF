@@ -1,0 +1,19 @@
+wind_info: {}
+
+mooring_options: {
+  # Options for MoorPy Models
+  depth: 200,
+  anchor_angles: [60, 180, 300],
+  anchor_2_fairlead_dist: 837.6,
+  line_length: 970,
+  fairlead_depth: -14, #-20
+  neutral_2_fairlead_dist: 40.868, #20
+  type_name: 'chain1',
+  diameter: 76.6, #120
+  material: 'chain',
+  mass: 13473000, #20095000, 
+  displaced_volume: 1952,
+  metacentric_radius: 150,
+  waterplane_area: 1215,
+  moment_arm: 90, # investigate details
+}
