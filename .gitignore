@@ -7,3 +7,7 @@ dynamic_CaseCtrl/
 
 AGENTS.md
 .opencode
+
+# Supporting files
+dynamic_results_figure.py
+dynamic_comparison_fidelity.py
