@@ -6,15 +6,17 @@ Method", Alg. "Multi-Fidelity Method").
 
 The high-fidelity (dynamic FAST.Farm) simulator and the low-fidelity (quasi-static
 FLORIS+MoorPy) simulator are probed jointly with the same perturbation direction
-u_{n,k}. Their two-point bandit gradients are fused per partial derivative term,
+u_{n,k}. Their one-point bandit gradients are fused per partial derivative term,
 anchored on the low-fidelity clean gradient with a drift-free correction:
 
     g = g^{l,cln} + c * (g^h - g^l)
 
-where g^h / g^l are the drifted HF / LF gradients (base at wind w_0, probe at wind
-w_i) and g^{l,cln} is the clean synchronous LF gradient (both probes at w_0).
-Because the environmental drift is common-mode to both simulators it cancels in the
-high-minus-low difference, so the correction (g^h - g^l) is drift-free.
+where g^h / g^l are the drifted HF / LF probe gradients (probe at wind w_i) and
+g^{l,cln} is the clean synchronous LF probe gradient (at w_0). Because the
+environmental drift is common-mode to both simulators it cancels in the
+high-minus-low difference, so the correction (g^h - g^l) is drift-free. The
+one-point estimator never queries the committed point, so each partial uses only
+its probe cost.
 
 The control-variate coefficient c is estimated online. For the LF-anchored estimator
 g = A + c*D with anchor A = g^{l,cln} and correction D = g^h - g^l, the
@@ -28,7 +30,7 @@ E[D^2] (cf. the correlation-based EMA of liu2025multi), and clamped to [0, 1]
 
 The dynamic interface exposes one power measurement per ``interface.step()`` (the
 measurement belongs to the yaw command sent one step earlier), so a single bandit
-update spans N+1 consecutive steps (base + one probe per turbine), exactly as in
+update spans N consecutive steps (one probe per turbine), exactly as in
 ``dynamic_loop_doo_hf.py``.
 '''
 import os
@@ -96,7 +98,7 @@ save_figure_option = True    # True → save all figures to dynamic_Data/<run_na
 print_result = False
 visualization = True
 DATA_DIR = "dynamic_Data"                            # all .pkl / figures live here
-result_file_name = "mf_tpbe-1x2-timeVaryingWind.pkl"
+result_file_name = "mf_opbe-1x2-timeVaryingWind.pkl"
 # --- User-defined paths ---
 FFexePath = "D:\\2_PhD_UBC\\Code\\FASTv355\\FAST.Farm_x64_OMP_v355.exe"                              # parallel executable (with SC_DLL_Full variant)
 FFsimPath = "D:\\2_PhD_UBC\\Code\\DOO-FOWF\\dynamic_CaseCtrl\\1x2.fstf"
@@ -118,7 +120,7 @@ P_rate = rated_power(SI)                       # shared normalization for both f
 GAMMA_MAX = YAW_BOUND                          # 30 deg
 DELTA     = 2.0                                # exploration delta_t (deg)
 XI        = 0.1                                # shrinkage xi_t -> effective bound 27 deg
-ALPHA0    = 500.0                              # base stepsize alpha_0 (deg^2) -- TUNE ME
+ALPHA0    = 10.0                               # base stepsize alpha_0 (deg^2) -- TUNE ME (one-point bandit)
 WARM_START = True                              # True -> warm-start quasi-static solver from measured layout
 CV_EMA_ALPHA = 0.95                            # EMA smoothing for the online control-variate coefficient c
 CV_STD_EPS   = 1e-8                            # guard: fall back to c=0 when Var(g^h - g^l) is below this
@@ -153,10 +155,10 @@ os.makedirs(run_dir, exist_ok=True)
 
 
 def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
-                            c_base_hf, c_probe_hf,
-                            c_base_lf, c_probe_lf, c_probe_lf_cln):
-    '''Assemble the control-variate fused bandit gradient and update the per-turbine
-    yaws (message-passing + projected-update tail of the Multi-Fidelity Algorithm).
+                            c_probe_hf, c_probe_lf, c_probe_lf_cln):
+    '''Assemble the control-variate fused one-point bandit gradient and update the
+    per-turbine yaws (message-passing + projected-update tail of the Multi-Fidelity
+    Algorithm).
 
     Each partial derivative term (own partial df_i/dgamma_i and cross partials
     df_j/dgamma_i for j in N_i) is fused independently, anchored on the clean LF
@@ -164,7 +166,9 @@ def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
 
         g = g_lf_cln + c * (g_hf - g_lf)
 
-    before being assembled into the full gradient for turbine i. The coefficient
+    before being assembled into the full gradient for turbine i. Every partial is a
+    one-point bandit estimate formed directly from its probe cost (no base query),
+    e.g. g_hf = f^h(gamma + delta*u_i, w_i) / delta * u_i. The coefficient
     ``cv_coefficient`` is an online scalar shared by all partial terms.
 
     Parameters
@@ -175,9 +179,7 @@ def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
     xi           : float, shrinkage xi_k in (0,1); projection box is (1-xi)*X_i.
     us           : dict, {turb_idx: +1/-1} probe directions of the current cycle.
     cv_coefficient : float, online control-variate coefficient in [0, 1].
-    c_base_hf    : (N,) float, HF cost vector f^h_k(gamma) at w_0.
     c_probe_hf   : dict, {i: (N,) float} HF cost at (gamma_i + delta*u_i, gamma_{-i}), w_i.
-    c_base_lf    : (N,) float, LF cost vector f^l_k(gamma) at w_0.
     c_probe_lf   : dict, {i: (N,) float} LF drifted cost at (gamma_i + delta*u_i), w_i.
     c_probe_lf_cln : dict, {i: (N,) float} LF clean cost at (gamma_i + delta*u_i), w_0.
 
@@ -188,7 +190,6 @@ def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
     grad_hf      : (N,) float, assembled HF gradient (diagnostic).
     grad_lf      : (N,) float, assembled drifted LF gradient (diagnostic).
     grad_lf_cln  : (N,) float, assembled clean LF gradient (diagnostic).
-    c_base_hf    : (N,) float, HF base cost (unchanged, for logging).
     A            : (M,) float, anchor partials g_lf_cln (for the online c update).
     D            : (M,) float, correction partials g_hf - g_lf (for the online c update).
     '''
@@ -207,9 +208,9 @@ def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
         u  = us[i]
 
         # own partial: df_i/dgamma_i (probe i, cost i)
-        gh   = (c_probe_hf[i][i]     - c_base_hf[i]) / delta * u
-        gl   = (c_probe_lf[i][i]     - c_base_lf[i]) / delta * u
-        glcn = (c_probe_lf_cln[i][i] - c_base_lf[i]) / delta * u
+        gh   = c_probe_hf[i][i]     / delta * u
+        gl   = c_probe_lf[i][i]     / delta * u
+        glcn = c_probe_lf_cln[i][i] / delta * u
         grad[i]        += glcn + cv_coefficient * (gh - gl)
         grad_hf[i]     += gh
         grad_lf[i]     += gl
@@ -219,9 +220,9 @@ def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
 
         # cross partials: df_j/dgamma_i for neighbor j -> sends to i (probe i, cost j)
         for j in a.neighbors:
-            gh   = (c_probe_hf[i][j]     - c_base_hf[j]) / delta * u
-            gl   = (c_probe_lf[i][j]     - c_base_lf[j]) / delta * u
-            glcn = (c_probe_lf_cln[i][j] - c_base_lf[j]) / delta * u
+            gh   = c_probe_hf[i][j]     / delta * u
+            gl   = c_probe_lf[i][j]     / delta * u
+            glcn = c_probe_lf_cln[i][j] / delta * u
             grad[i]        += glcn + cv_coefficient * (gh - gl)
             grad_hf[i]     += gh
             grad_lf[i]     += gl
@@ -236,26 +237,24 @@ def distributed_doo_step_mf(agents, alpha, delta, xi, us, cv_coefficient,
         a.gamma = float(np.clip(a.gamma - alpha * grad[a.idx], lo, hi))  # projected gradient descent
 
     gamma = np.array([a.gamma for a in agents])
-    return (gamma, grad, grad_hf, grad_lf, grad_lf_cln, c_base_hf,
+    return (gamma, grad, grad_hf, grad_lf, grad_lf_cln,
             np.asarray(A_vals), np.asarray(D_vals))
 
 
 class MFBanditController:
-    '''Stateful multi-fidelity two-point bandit controller.
+    '''Stateful multi-fidelity one-point bandit controller.
 
-    Mirrors ``HFBanditController``'s N+1-step probe cycle (base + one probe per
-    turbine), but at every high-fidelity query instant also evaluates the
-    low-fidelity model at the same time/wind/yaw with the same perturbation
-    direction ``u``:
+    Mirrors ``HFBanditController``'s N-step probe cycle (one probe per turbine),
+    but at every high-fidelity query instant also evaluates the low-fidelity model
+    at the same time/wind/yaw with the same perturbation direction ``u``:
 
-        step 0  -> base    (all yaws at committed gamma, wind w_0)
-        step i  -> probe_i (turbine i at gamma_i + delta*u_i, wind w_i), i = 1..N
+        step i  -> probe_i (turbine i at gamma_i + delta*u_i, wind w_i), i = 0..N-1
 
-    At the base step the clean LF base cost f^l(gamma, w_0) is recorded; at each
-    probe step the drifted LF cost f^l(gamma + delta*u_i, w_i) and the clean LF cost
-    f^l(gamma + delta*u_i, w_0) are recorded. On cycle completion the fused gradient
-    is assembled with the online control-variate coefficient ``cv_coefficient``, which is then
-    updated from the anchor/correction partials (A, D) of that cycle.
+    At each probe step the drifted LF cost f^l(gamma + delta*u_i, w_i) and the clean
+    LF cost f^l(gamma + delta*u_i, w_0) are recorded; the clean reference wind w_0 and
+    layout are latched at the first probe of the cycle. On cycle completion the fused
+    gradient is assembled with the online control-variate coefficient ``cv_coefficient``,
+    which is then updated from the anchor/correction partials (A, D) of that cycle.
     '''
     def __init__(self, agents, SI, P_rate, alpha0, delta, xi, gamma_max, rng,
                  warm_start=True, cv_ema_alpha=0.95, cv_std_eps=1e-8):
@@ -272,7 +271,7 @@ class MFBanditController:
         self.cv_std_eps   = cv_std_eps
         self.N           = len(agents)
         self.k           = 0          # number of completed algorithm updates
-        self.phase       = 0          # 0 -> base active; i in 1..N -> probe_{i-1} active
+        self.phase       = -1         # -1 -> nothing measured yet; i in 0..N-1 -> probe_i active
         self.us          = {}         # turb_idx -> +/-1 probe direction of current cycle
 
         # online control-variate coefficient (LF-anchored, in [0, 1])
@@ -283,14 +282,12 @@ class MFBanditController:
         self._ema_D      = 0.0        # E[D]
         self._ema_D2     = 0.0        # E[D^2]
 
-        # high-fidelity costs (dynamic simulator)
-        self.c_base_hf   = None
+        # high-fidelity probe costs (dynamic simulator)
         self.c_probe_hf  = {}
-        # low-fidelity costs (quasi-static simulator)
-        self.c_base_lf   = None
+        # low-fidelity probe costs (quasi-static simulator)
         self.c_probe_lf  = {}         # drifted: probe at w_i
         self.c_probe_lf_cln = {}      # clean:   probe at w_0
-        # base-step wind + layout (for the clean synchronous LF evals)
+        # clean reference wind + layout (latched at the first probe of the cycle)
         self.w0          = None
         self.base_layout = None
 
@@ -299,8 +296,6 @@ class MFBanditController:
         self.last_grad_hf      = np.full(self.N, np.nan)
         self.last_grad_lf      = np.full(self.N, np.nan)
         self.last_grad_lf_cln  = np.full(self.N, np.nan)
-        self.last_c_base       = np.full(self.N, np.nan)
-        self.last_c_base_lf    = np.full(self.N, np.nan)
 
     def _gamma(self):
         return np.array([a.gamma for a in self.agents])
@@ -311,6 +306,12 @@ class MFBanditController:
         gp = gamma.copy()
         gp[i] = np.clip(gamma[i] + self.delta * self.us[i], -self.gamma_max, self.gamma_max)
         return gp
+
+    def _issue_probe(self, i):
+        '''Draw the probe direction for turbine i and return the corresponding yaw command.'''
+        u = 1.0 if self.rng.uniform() < 0.5 else -1.0
+        self.us[i] = u
+        return self._probe_yaw(i)
 
     def _lf_cost(self, yaws, wind, layout):
         '''Evaluate the low-fidelity cost f^l(yaws; wind) = -P^l/P_rate, seeded from
@@ -324,68 +325,50 @@ class MFBanditController:
     def record(self, powers, wind, layout):
         '''Store the cost of the just-completed high-fidelity step and evaluate the
         low-fidelity model at the same instant (same time/wind/yaw).'''
-        c_hf = -np.asarray(powers, dtype=float) / self.P_rate
-        gamma = self._gamma()
-        if self.phase == 0:
-            self.c_base_hf   = c_hf
+        if self.phase < 0:
+            return                                  # initial default-command measurement is discarded
+        i = self.phase
+        self.c_probe_hf[i] = -np.asarray(powers, dtype=float) / self.P_rate
+        if i == 0:
+            # latch the clean reference wind/layout at the first probe of the cycle
             self.w0          = wind
             self.base_layout = layout.copy()
-            self.c_base_lf   = self._lf_cost(gamma, self.w0, self.base_layout)
-        else:
-            i = self.phase - 1
-            self.c_probe_hf[i]     = c_hf
-            self.c_probe_lf[i]     = self._lf_cost(self._probe_yaw(i), wind, layout)
-            self.c_probe_lf_cln[i] = self._lf_cost(self._probe_yaw(i), self.w0, self.base_layout)
+        self.c_probe_lf[i]     = self._lf_cost(self._probe_yaw(i), wind, layout)
+        self.c_probe_lf_cln[i] = self._lf_cost(self._probe_yaw(i), self.w0, self.base_layout)
 
     def next_command(self):
-        '''Return the yaw command for the next step; every N+1 steps also returns the update.'''
-        gamma = self._gamma()
+        '''Return the yaw command for the next step; every N steps also returns the update.'''
+        if self.phase < 0:
+            # first call -> start the cycle with probe 0
+            self.phase = 0
+            return self._issue_probe(0), None
 
-        if self.phase == 0:
-            # base just measured -> issue probe of turbine 0
-            u = 1.0 if self.rng.uniform() < 0.5 else -1.0
-            self.us[0] = u
-            yaw = gamma.copy()
-            yaw[0] = np.clip(gamma[0] + self.delta * u, -self.gamma_max, self.gamma_max)
-            self.phase = 1
-            return yaw, None
-
-        if self.phase < self.N:
-            # probe (phase-1) just measured -> issue probe of turbine (phase)
-            i = self.phase
-            u = 1.0 if self.rng.uniform() < 0.5 else -1.0
-            self.us[i] = u
-            yaw = gamma.copy()
-            yaw[i] = np.clip(gamma[i] + self.delta * u, -self.gamma_max, self.gamma_max)
+        if self.phase < self.N - 1:
+            # probe (phase) just measured -> issue probe (phase+1)
             self.phase += 1
-            return yaw, None
+            return self._issue_probe(self.phase), None
 
-        # last probe just measured -> assemble fused gradient and update
+        # last probe just measured -> assemble fused gradient and update, then start next cycle
         alpha = self.alpha0 / np.sqrt(self.k + 1.0)
-        (gamma_new, grad, grad_hf, grad_lf, grad_lf_cln, c_base_hf,
+        (gamma_new, grad, grad_hf, grad_lf, grad_lf_cln,
          A_vals, D_vals) = distributed_doo_step_mf(
             self.agents, alpha, self.delta, self.xi, self.us, self.cv_coefficient,
-            self.c_base_hf, self.c_probe_hf,
-            self.c_base_lf, self.c_probe_lf, self.c_probe_lf_cln,
+            self.c_probe_hf, self.c_probe_lf, self.c_probe_lf_cln,
         )
         self._update_cv(A_vals, D_vals)
         self.last_grad        = grad
         self.last_grad_hf     = grad_hf
         self.last_grad_lf     = grad_lf
         self.last_grad_lf_cln = grad_lf_cln
-        self.last_c_base      = c_base_hf
-        self.last_c_base_lf   = self.c_base_lf
         self.k += 1
-        self.phase       = 0
         self.us          = {}
-        self.c_base_hf   = None
         self.c_probe_hf  = {}
-        self.c_base_lf   = None
         self.c_probe_lf  = {}
         self.c_probe_lf_cln = {}
         self.w0          = None
         self.base_layout = None
-        return gamma_new, (gamma_new, grad, c_base_hf)
+        self.phase       = 0
+        return self._issue_probe(0), (gamma_new, grad, None)
 
     def _update_cv(self, A, D):
         '''Update the online control-variate coefficient from the anchor A = g_lf_cln
@@ -482,7 +465,7 @@ for t in range(max_iter):
         total_power += power_i.item()
     results.append(step_result)
 
-    # 3. Joint multi-fidelity two-point bandit update. The wind and dynamic layout
+    # 3. Joint multi-fidelity one-point bandit update. The wind and dynamic layout
     #    are sampled at the current high-fidelity instant so the low-fidelity model
     #    sees the same time/wind/yaw as the high-fidelity simulator.
     ws_t, wd_t = wind_at_time(SI.wind_profile, (t + 1) * dt)
@@ -506,16 +489,14 @@ for t in range(max_iter):
     # 4. Send commands (buffered, consumed by the NEXT step())
     for i in range(n_turbines):
         interface.set_command(yaw=float(yaw_cmd[i]), ipc=None, torque=None, turb_idx=i)
-        step_result[f"ctrl_yaw_cmd_T{i}"] = float(yaw_cmd[i])        # base or probe command
+        step_result[f"ctrl_yaw_cmd_T{i}"] = float(yaw_cmd[i])        # probe command
         step_result[f"gamma_T{i}"]        = float(AGENTS[i].gamma)   # committed yaw anchor
 
-    # grad / cost / coefficient reflect the most recent completed update (NaN until the first)
+    # grad / coefficient reflect the most recent completed update (NaN until the first)
     step_result["grad"]         = mf_ctrl.last_grad.copy()
     step_result["grad_hf"]      = mf_ctrl.last_grad_hf.copy()
     step_result["grad_lf"]      = mf_ctrl.last_grad_lf.copy()
     step_result["grad_lf_cln"]  = mf_ctrl.last_grad_lf_cln.copy()
-    step_result["cost_base"]    = mf_ctrl.last_c_base.copy()
-    step_result["qs_cost"]      = mf_ctrl.last_c_base_lf.copy()
     step_result["cv_coefficient"] = float(mf_ctrl.cv_coefficient)
     step_result["ctrl_compute_time"] = time.perf_counter() - t0
 
@@ -581,15 +562,11 @@ if visualization or save_figure_option:
     ax2.legend(); ax2.grid(True); fig2.tight_layout()
     _savefig(fig2, "yaw")
 
-    # 3. Cost: realized dynamic + HF base (high-fidelity) + LF base (quasi-static)
+    # 3. Cost: realized dynamic cost
     cost_realized = -farm_power * 1e6 / P_rate           # f_t = -P_real/P_rate
-    cost_base     = np.array([r["cost_base"].sum() for r in results])
-    cost_qs       = np.array([r["qs_cost"].sum() for r in results])
     fig3, ax3 = plt.subplots(figsize=(8, 4))
     ax3.plot(t_arr, cost_realized,
              label=r"$f_t=-P_{\mathrm{real}}/P_{\mathrm{rate}}$", lw=2)
-    ax3.plot(t_arr, cost_base, label="base (high-fidelity)", ls="--")
-    ax3.plot(t_arr, cost_qs,   label="base (low-fidelity)", ls=":")
     ax3.set_xlabel("Time (s)"); ax3.set_ylabel("Cost")
     ax3.set_title("Cost function value")
     ax3.legend(); ax3.grid(True); fig3.tight_layout()

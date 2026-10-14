@@ -90,9 +90,9 @@ P_rate = rated_power(SI)
 GAMMA_MAX = YAW_BOUND                          # 30 deg
 DELTA     = 2.0                                # exploration delta_t (deg)
 XI        = 0.1                                # shrinkage xi_t -> effective bound 27 deg
-ALPHA0    = 500.0                              # base stepsize alpha_0 (deg^2) -- TUNE ME
+ALPHA0    = 10.0                               # base stepsize alpha_0 (deg^2) -- TUNE ME (one-point bandit)
 WARM_START = True                              # True -> warm-start quasi-static solver from baseline layout
-GRAD_ESTIMATOR = "one_point_bandit"          # "one_point_bandit" | "two_point_bandit" | "central_difference"
+GRAD_ESTIMATOR = "one_point_bandit"            # one-point bandit estimator (only estimator implemented)
 
 # adjacency: turbine i is coupled to its up/down-stream neighbors i-2, i-1, i+1, i+2
 NEIGHBORS = [
@@ -134,144 +134,6 @@ run_dir  = os.path.join(DATA_DIR, run_name)             # e.g. "dynamic_Data/war
 os.makedirs(run_dir, exist_ok=True)
 snapshot_dir = os.path.join(run_dir, "quasi-static-snapshot")
 os.makedirs(snapshot_dir, exist_ok=True)
-
-
-def distributed_doo_step_two_point_bandit(agents, SI, P_rate, alpha, delta, xi, gamma_max, rng, warm_start=True):
-    '''One iteration of Algorithm 1 with the two-point bandit estimator and
-    per-turbine agents with neighbor messaging.
-
-    Requires N+1 quasi-static evaluations per step (1 committed + 1 probe per turbine).
-
-    Each agent owns its own yaw; cross-partials df_j/dgamma_i are computed by the
-    neighbor j and passed to agent i, so every update uses only local + neighbor info.
-
-    Parameters
-    ----------
-    agents    : list[TurbineAgent], one agent per turbine (owns gamma_i and box X_i).
-    SI        : FLORISFarmSim, quasi-static simulator used as the (whole-farm) cost oracle.
-    P_rate    : float, rated farm power [W]; cost is f = -P/P_rate.
-    alpha     : float, stepsize alpha_t [deg^2].
-    delta     : float, exploration delta_t [deg].
-    xi        : float, shrinkage xi_t in (0,1); projection box is (1-xi)*X_i.
-    gamma_max : float, physical yaw bound [deg] (clips probes only).
-    rng       : numpy.Generator, seeded RNG for the +/-1 probe directions.
-    warm_start: bool, warm-start the quasi-static solver from the baseline layout.
-
-    Returns
-    -------
-    gamma     : (N,) float, updated yaws gamma_{i,t+1}.
-    grad      : (N,) float, assembled bandit gradient estimate ghat_{i,t}.
-    c_base    : (N,) float, cost vector f_k(gamma) at the committed yaws.
-    '''
-    def cost(yaws, initial_layout=None):
-        # f(yaws) = -P(yaws)/P_rate, shape (N,) -- oracle computes the whole farm
-        SI.take_step(np.asarray(yaws, dtype=float),
-                     warm_start=warm_start, initial_layout=initial_layout)
-        return -SI.get_powers().squeeze() / P_rate
-
-    N = len(agents)
-    gamma = np.array([a.gamma for a in agents])   # gather committed yaws (for the oracle only)
-
-    base_layout = SI.warm_layout.copy() if warm_start else None   # seed layout (measured reality)
-    c_base = cost(gamma, initial_layout=base_layout)              # f_k(gamma) for all k
-
-    # ---- sequential probe phase ----
-    c_probe = {}                                  # i -> cost vector at (gamma_i + delta*u_i, gamma_{-i})
-    us      = {}
-    for a in agents:
-        u = 1.0 if rng.uniform() < 0.5 else -1.0    # Rademacher probe direction (+1 / -1)
-        gp = gamma.copy()
-        gp[a.idx] = np.clip(a.gamma + delta * u, -gamma_max, gamma_max)  # perturb only turbine i
-        c_probe[a.idx] = cost(gp, initial_layout=base_layout)
-        us[a.idx] = u
-
-    # ---- message passing: own partial + cross-partials from neighbors ----
-    grad = np.zeros(N)
-    for a in agents:
-        i = a.idx
-        g = (c_probe[i][i] - c_base[i]) / delta * us[i]       # own partial: df_i/dgamma_i
-        for j in a.neighbors:                                 # neighbor j -> sends to i
-            g += (c_probe[i][j] - c_base[j]) / delta * us[i]  # cross partial: df_j/dgamma_i
-        grad[i] = g
-
-    # ---- local projected update (each agent updates only itself) ----
-    for a in agents:
-        lo = (1.0 - xi) * a.x_lo                   # shrunken box keeps the next probe feasible
-        hi = (1.0 - xi) * a.x_hi
-        a.gamma = float(np.clip(a.gamma - alpha * grad[a.idx], lo, hi))  # projected gradient descent
-
-    return np.array([a.gamma for a in agents]), grad, c_base
-
-
-def distributed_doo_step_central_difference(agents, SI, P_rate, alpha, delta, xi, gamma_max, rng, warm_start=True):
-    '''One iteration of Algorithm 1 with the central-difference (symmetric) gradient
-    estimator and per-turbine agents with neighbor messaging.
-
-    For scalar yaw (n_i = 1) the central difference is deterministic,
-        g_i = ( f(gamma_i + delta) - f(gamma_i - delta) ) / (2 delta),
-    so no random probe direction is needed (``rng`` is accepted only to keep a
-    uniform signature with the two-point estimator and is unused here).
-
-    Requires 2N+1 quasi-static evaluations per step (1 committed + 2 probes per turbine).
-
-    Parameters
-    ----------
-    agents    : list[TurbineAgent], one agent per turbine (owns gamma_i and box X_i).
-    SI        : FLORISFarmSim, quasi-static simulator used as the (whole-farm) cost oracle.
-    P_rate    : float, rated farm power [W]; cost is f = -P/P_rate.
-    alpha     : float, stepsize alpha_t [deg^2].
-    delta     : float, exploration delta_t [deg].
-    xi        : float, shrinkage xi_t in (0,1); projection box is (1-xi)*X_i.
-    gamma_max : float, physical yaw bound [deg] (clips probes only).
-    rng       : unused, kept for a uniform signature with the two-point estimator.
-    warm_start: bool, warm-start the quasi-static solver from the baseline layout.
-
-    Returns
-    -------
-    gamma     : (N,) float, updated yaws gamma_{i,t+1}.
-    grad      : (N,) float, assembled central-difference gradient estimate ghat_{i,t}.
-    c_base    : (N,) float, cost vector f_k(gamma) at the committed yaws.
-    '''
-    def cost(yaws, initial_layout=None):
-        # f(yaws) = -P(yaws)/P_rate, shape (N,) -- oracle computes the whole farm
-        SI.take_step(np.asarray(yaws, dtype=float),
-                     warm_start=warm_start, initial_layout=initial_layout)
-        return -SI.get_powers().squeeze() / P_rate
-
-    N = len(agents)
-    gamma = np.array([a.gamma for a in agents])   # gather committed yaws (for the oracle only)
-
-    base_layout = SI.warm_layout.copy() if warm_start else None   # seed layout (measured reality)
-    c_base = cost(gamma, initial_layout=base_layout)              # f_k(gamma) for all k (reporting + warm-start anchor)
-
-    # ---- sequential probe phase (two symmetric probes per turbine) ----
-    c_plus  = {}
-    c_minus = {}
-    for a in agents:
-        gp = gamma.copy()
-        gp[a.idx] = np.clip(a.gamma + delta, -gamma_max, gamma_max)   # +delta probe
-        c_plus[a.idx] = cost(gp, initial_layout=base_layout)
-
-        gm = gamma.copy()
-        gm[a.idx] = np.clip(a.gamma - delta, -gamma_max, gamma_max)   # -delta probe
-        c_minus[a.idx] = cost(gm, initial_layout=base_layout)
-
-    # ---- message passing: own partial + cross-partials from neighbors ----
-    grad = np.zeros(N)
-    for a in agents:
-        i = a.idx
-        g = (c_plus[i][i] - c_minus[i][i]) / (2.0 * delta)       # own partial: df_i/dgamma_i
-        for j in a.neighbors:                                    # neighbor j -> sends to i
-            g += (c_plus[i][j] - c_minus[i][j]) / (2.0 * delta)  # cross partial: df_j/dgamma_i
-        grad[i] = g
-
-    # ---- local projected update (each agent updates only itself) ----
-    for a in agents:
-        lo = (1.0 - xi) * a.x_lo                   # shrunken box keeps the next probe feasible
-        hi = (1.0 - xi) * a.x_hi
-        a.gamma = float(np.clip(a.gamma - alpha * grad[a.idx], lo, hi))  # projected gradient descent
-
-    return np.array([a.gamma for a in agents]), grad, c_base
 
 
 def distributed_doo_step_one_point_bandit(agents, SI, P_rate, alpha, delta, xi, gamma_max, rng, warm_start=True):
@@ -347,11 +209,9 @@ def distributed_doo_step_one_point_bandit(agents, SI, P_rate, alpha, delta, xi, 
 
     return np.array([a.gamma for a in agents]), grad, None
 
-# --- Dispatch table: switch gradient estimators here ---
+# --- Dispatch table: only the one-point bandit estimator is implemented ---
 GRAD_ESTIMATORS = {
     "one_point_bandit":   distributed_doo_step_one_point_bandit,
-    "two_point_bandit":   distributed_doo_step_two_point_bandit,
-    "central_difference": distributed_doo_step_central_difference,
 }
 
 # --- Simulation loop ---

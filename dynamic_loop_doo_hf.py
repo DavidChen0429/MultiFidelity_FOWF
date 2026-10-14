@@ -2,7 +2,8 @@
 #           mpiexec -n 1 python dynamic_loop_doo_hf.py
 '''
 Implement Algorithm 1 from overleaf/main.tex (distributed online optimization with bandit feedback),
-high-fidelity variant: the dynamic FAST.Farm simulator is probed directly for the gradient estimate.
+high-fidelity variant: the dynamic FAST.Farm simulator is probed directly for the one-point
+bandit gradient estimate (no committed-point query).
 '''
 import os
 import time
@@ -31,7 +32,7 @@ save_figure_option = True    # True → save all figures to dynamic_Data/<run_na
 print_result = False
 visualization = True
 DATA_DIR = "dynamic_Data"                            # all .pkl / figures live here
-result_file_name = "hf_tpbe-1x3-steadyWind.pkl"
+result_file_name = "hf_opbe-1x3-steadyWind.pkl"
 # --- User-defined paths ---
 FFexePath = "D:\\2_PhD_UBC\\Code\\FASTv355\\FAST.Farm_x64_OMP_v355.exe"                              # parallel executable (with SC_DLL_Full variant)
 FFsimPath = "D:\\2_PhD_UBC\\Code\\DOO-FOWF\\dynamic_CaseCtrl\\1x3.fstf"  
@@ -51,7 +52,7 @@ P_rate = P_RATED_PER_TURBINE * n_turbines     # rated farm power [W], normalizes
 GAMMA_MAX = YAW_BOUND                          # 30 deg
 DELTA     = 2.0                                # exploration delta_t (deg)
 XI        = 0.1                                # shrinkage xi_t -> effective bound 27 deg
-ALPHA0    = 500.0                              # base stepsize alpha_0 (deg^2) -- TUNE ME
+ALPHA0    = 10.0                               # base stepsize alpha_0 (deg^2) -- TUNE ME (one-point bandit)
 
 # adjacency: turbine i is coupled to its up/down-stream neighbors i-2, i-1, i+1, i+2
 NEIGHBORS = [
@@ -82,16 +83,21 @@ run_dir  = os.path.join(DATA_DIR, run_name)             # e.g. "dynamic_Data/war
 os.makedirs(run_dir, exist_ok=True)
 
 
-def distributed_doo_step_hf_two_point_bandit(agents, alpha, delta, xi, us, c_base, c_probe):
-    '''Assemble the two-point bandit gradient from high-fidelity cost samples and
+def distributed_doo_step_hf_one_point_bandit(agents, alpha, delta, xi, us, c_probe):
+    '''Assemble the one-point bandit gradient from high-fidelity cost samples and
     update the per-turbine yaws.
 
     This is the message-passing + projected-update tail of Algorithm 1: each agent
     estimates its own partial derivative plus the cross-partials reported by its
-    neighbors, then takes a projected gradient step. The cost vectors ``c_base`` /
-    ``c_probe`` come from the high-fidelity dynamic simulator (collected over ``N+1``
+    neighbors, then takes a projected gradient step. The probe cost vectors
+    ``c_probe`` come from the high-fidelity dynamic simulator (collected over ``N``
     consecutive ``interface.step()`` calls by ``HFBanditController``), so this function
     never touches a simulator.
+
+    The one-point estimator never queries the committed point; each partial is formed
+    directly from the probe cost,
+        g_i = (1/delta) * f_i(gamma + delta*u_i) * u_i,
+    so only ``N`` high-fidelity evaluations are needed per update.
 
     Parameters
     ----------
@@ -100,14 +106,12 @@ def distributed_doo_step_hf_two_point_bandit(agents, alpha, delta, xi, us, c_bas
     delta   : float, exploration delta_k [deg].
     xi      : float, shrinkage xi_k in (0,1); projection box is (1-xi)*X_i.
     us      : dict, {turb_idx: +1/-1} probe directions for the current cycle.
-    c_base  : (N,) float, cost vector f_k(gamma) at the committed yaws.
     c_probe : dict, {turb_idx: (N,) float} cost at (gamma_i + delta*u_i, gamma_{-i}).
 
     Returns
     -------
     gamma  : (N,) float, updated yaws gamma_{i,k+1}.
     grad   : (N,) float, assembled bandit gradient estimate ghat_{i,k}.
-    c_base : (N,) float, cost vector at the committed yaws (unchanged, for logging).
     '''
     N = len(agents)
 
@@ -115,9 +119,9 @@ def distributed_doo_step_hf_two_point_bandit(agents, alpha, delta, xi, us, c_bas
     grad = np.zeros(N)
     for a in agents:
         i = a.idx
-        g = (c_probe[i][i] - c_base[i]) / delta * us[i]       # own partial: df_i/dgamma_i
+        g = c_probe[i][i] / delta * us[i]                     # own partial: df_i/dgamma_i
         for j in a.neighbors:                                 # neighbor j -> sends to i
-            g += (c_probe[i][j] - c_base[j]) / delta * us[i]  # cross partial: df_j/dgamma_i
+            g += c_probe[i][j] / delta * us[i]                # cross partial: df_j/dgamma_i
         grad[i] = g
 
     # ---- local projected update (each agent updates only itself) ----
@@ -126,22 +130,22 @@ def distributed_doo_step_hf_two_point_bandit(agents, alpha, delta, xi, us, c_bas
         hi = (1.0 - xi) * a.x_hi
         a.gamma = float(np.clip(a.gamma - alpha * grad[a.idx], lo, hi))  # projected gradient descent
 
-    return np.array([a.gamma for a in agents]), grad, c_base
+    return np.array([a.gamma for a in agents]), grad
 
 
 class HFBanditController:
-    '''Stateful high-fidelity two-point bandit controller.
+    '''Stateful high-fidelity one-point bandit controller.
 
     Because the dynamic interface exposes only one power measurement per
     ``interface.step()`` (the measurement belongs to the yaw command sent one step
-    earlier), a single bandit update spans ``N+1`` consecutive steps:
+    earlier), a single bandit update spans ``N`` consecutive steps (one probe per
+    turbine); the one-point estimator never queries the committed point:
 
-        step 0 -> base    (all yaws at the committed gamma)
-        step i -> probe_i (only turbine i at gamma_i + delta*u_i), i = 1..N
+        step i -> probe_i (only turbine i at gamma_i + delta*u_i), i = 0..N-1
 
     The simulation loop calls ``record(powers)`` right after stepping (storing the
     freshly measured cost), then ``next_command()`` (returning the yaw command for the
-    *next* step, and, every ``N+1`` steps, the completed update).
+    *next* step, and, every ``N`` steps, the completed update).
     '''
     def __init__(self, agents, P_rate, alpha0, delta, xi, gamma_max, rng):
         self.agents    = agents
@@ -153,60 +157,56 @@ class HFBanditController:
         self.rng       = rng
         self.N         = len(agents)
         self.k         = 0          # number of completed algorithm updates
-        self.phase     = 0          # 0 -> base active; i in 1..N -> probe_{i-1} active
+        self.phase     = -1         # -1 -> nothing measured yet; i in 0..N-1 -> probe_i active
         self.us        = {}         # turb_idx -> +/-1 probe direction of current cycle
-        self.c_base    = None
         self.c_probe   = {}
         self.last_grad    = np.full(self.N, np.nan)   # last completed update's gradient
-        self.last_c_base  = np.full(self.N, np.nan)   # last completed cycle's base cost
 
     def _gamma(self):
         return np.array([a.gamma for a in self.agents])
 
+    def _probe_yaw(self, i):
+        '''Yaw vector that probes turbine i alone, relative to the committed gamma.'''
+        gamma = self._gamma()
+        gp = gamma.copy()
+        gp[i] = np.clip(gamma[i] + self.delta * self.us[i], -self.gamma_max, self.gamma_max)
+        return gp
+
+    def _issue_probe(self, i):
+        '''Draw the probe direction for turbine i and return the corresponding yaw command.'''
+        u = 1.0 if self.rng.uniform() < 0.5 else -1.0
+        self.us[i] = u
+        return self._probe_yaw(i)
+
     def record(self, powers):
-        '''Store the cost of the just-completed step under the currently active slot.'''
-        c = -np.asarray(powers, dtype=float) / self.P_rate
-        if self.phase == 0:
-            self.c_base = c
-        else:
-            self.c_probe[self.phase - 1] = c
+        '''Store the cost of the just-completed step under the currently active probe.'''
+        if self.phase < 0:
+            return                                  # initial default-command measurement is discarded
+        self.c_probe[self.phase] = -np.asarray(powers, dtype=float) / self.P_rate
 
     def next_command(self):
-        '''Return the yaw command for the next step; every N+1 steps also returns the update.'''
-        gamma = self._gamma()
+        '''Return the yaw command for the next step; every N steps also returns the update.'''
+        if self.phase < 0:
+            # first call -> start the cycle with probe 0
+            self.phase = 0
+            return self._issue_probe(0), None
 
-        if self.phase == 0:
-            # base just measured -> issue probe of turbine 0
-            u = 1.0 if self.rng.uniform() < 0.5 else -1.0
-            self.us[0] = u
-            yaw = gamma.copy()
-            yaw[0] = np.clip(gamma[0] + self.delta * u, -self.gamma_max, self.gamma_max)
-            self.phase = 1
-            return yaw, None
-
-        if self.phase < self.N:
-            # probe (phase-1) just measured -> issue probe of turbine (phase)
-            i = self.phase
-            u = 1.0 if self.rng.uniform() < 0.5 else -1.0
-            self.us[i] = u
-            yaw = gamma.copy()
-            yaw[i] = np.clip(gamma[i] + self.delta * u, -self.gamma_max, self.gamma_max)
+        if self.phase < self.N - 1:
+            # probe (phase) just measured -> issue probe (phase+1)
             self.phase += 1
-            return yaw, None
+            return self._issue_probe(self.phase), None
 
-        # last probe just measured -> assemble gradient and update
+        # last probe just measured -> assemble gradient and update, then start next cycle
         alpha = self.alpha0 / np.sqrt(self.k + 1.0)
-        gamma_new, grad, c_base = distributed_doo_step_hf_two_point_bandit(
-            self.agents, alpha, self.delta, self.xi, self.us, self.c_base, self.c_probe,
+        gamma_new, grad = distributed_doo_step_hf_one_point_bandit(
+            self.agents, alpha, self.delta, self.xi, self.us, self.c_probe,
         )
-        self.last_grad   = grad
-        self.last_c_base = c_base
+        self.last_grad = grad
         self.k += 1
-        self.phase   = 0
         self.us      = {}
-        self.c_base  = None
         self.c_probe = {}
-        return gamma_new, (gamma_new, grad, c_base)
+        self.phase   = 0
+        return self._issue_probe(0), (gamma_new, grad)
 
 # --- High-fidelity bandit controller (stateful; drives the probe cycle across steps) ---
 hf_ctrl = HFBanditController(AGENTS, P_rate, ALPHA0, DELTA, XI, GAMMA_MAX, rng)
@@ -262,11 +262,10 @@ for t in range(max_iter):
         total_power += power_i.item()
     results.append(step_result)
 
-    # 3. Two-point bandit update (high-fidelity): the dynamic simulator is probed
+    # 3. One-point bandit update (high-fidelity): the dynamic simulator is probed
     #    directly. Each step's measured power belongs to the yaw command sent one step
-    #    earlier (base or a probe); HFBanditController pieces the N+1 samples into one
-    #    bandit update. gamma is the committed yaw, grad the gradient estimate, and
-    #    cost_base the cost vector at the committed yaws.
+    #    earlier (a probe); HFBanditController pieces the N probe samples into one
+    #    bandit update. gamma is the committed yaw and grad the gradient estimate.
     t0 = time.perf_counter()
     powers = np.array([step_result[f"power_T{i}"] for i in range(n_turbines)])
     hf_ctrl.record(powers)
@@ -275,12 +274,11 @@ for t in range(max_iter):
     # 4. Send commands (buffered, consumed by the NEXT step())
     for i in range(n_turbines):
         interface.set_command(yaw=float(yaw_cmd[i]), ipc=None, torque=None, turb_idx=i)
-        step_result[f"ctrl_yaw_cmd_T{i}"] = float(yaw_cmd[i])        # base or probe command
+        step_result[f"ctrl_yaw_cmd_T{i}"] = float(yaw_cmd[i])        # probe command
         step_result[f"gamma_T{i}"]        = float(AGENTS[i].gamma)   # committed yaw anchor
 
-    # grad / cost reflect the most recent completed update (NaN until the first)
+    # grad reflects the most recent completed update (NaN until the first)
     step_result["grad"]      = hf_ctrl.last_grad.copy()
-    step_result["cost_base"] = hf_ctrl.last_c_base.copy()
     step_result["ctrl_compute_time"] = time.perf_counter() - t0
 
     if print_result:
@@ -345,13 +343,11 @@ if visualization or save_figure_option:
     ax2.legend(); ax2.grid(True); fig2.tight_layout()
     _savefig(fig2, "yaw")
 
-    # 3. Cost: realized dynamic + high-fidelity base cost (at the committed yaw)
+    # 3. Cost: realized dynamic cost
     cost_realized = -farm_power * 1e6 / P_rate           # f_t = -P_real/P_rate
-    cost_base     = np.array([r["cost_base"].sum() for r in results])
     fig3, ax3 = plt.subplots(figsize=(8, 4))
     ax3.plot(t_arr, cost_realized,
              label=r"$f_t=-P_{\mathrm{real}}/P_{\mathrm{rate}}$", lw=2)
-    ax3.plot(t_arr, cost_base, label="base (high-fidelity)", ls="--")
     ax3.set_xlabel("Time (s)"); ax3.set_ylabel("Cost")
     ax3.set_title("Cost function value")
     ax3.legend(); ax3.grid(True); fig3.tight_layout()
