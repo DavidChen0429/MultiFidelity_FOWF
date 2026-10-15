@@ -39,7 +39,7 @@ where $\sum_{m \in \mathcal{N}_n} \partial f_{m,k}/\partial \gamma_{n,k}$ repres
 As introduced, gradient estimation requires perturbing the physical systems randomly, which is impractical for real FOWFs. Therefore, to ensure practical feasibility, we design two algorithms based on the auxiliary tools that are used to acquire the gradient information: a low-fidelity method and a multi-fidelity method in the following chapter.
 
 \begin{algorithm}
-\caption{Multi-Fidelity Method.}
+\caption{Cooperative Distributed Online Feedback Optimization Based on Multi-Fidelity Gradient Estimator.}
 \label{alg:doo-mf}
 \begin{algorithmic}
     \STATE \textbf{Input:} stepsize $\{\alpha_k\}$; exploration $\{\delta_k\}$; shrinkage $\{\xi_k\} \subset (0,1)$ with $\delta_k \le r(X_n)\xi_k$.
