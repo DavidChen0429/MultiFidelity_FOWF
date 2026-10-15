@@ -1,6 +1,9 @@
 \section{Methodology} \label{sec:method}
-Based on the above definitions and formulation, we designed the methodology.
-\subsection{Gradient Estimation} \label{sec:gradest}
+This section formulates the methodology.
+
+\subsection{Gradient Flow Analysis} \label{sec:gradientAnalysis}
+
+\subsection{Multi-Fidelity Gradient Estimation} \label{sec:mf-gradient}
 As previously analyzed, one big obstacle is that no analytic gradient of $f_{n,k}$ is available. Hence, gradients must be estimated from sampling data alone. We adopt the one-point bandit estimator for its simplicity, and the two-point bandit estimator for its lower variance, and briefly contrast it with the central-difference estimator.
 
 \emph{One-point estimator.} Querying the current point,
@@ -12,28 +15,18 @@ As previously analyzed, one big obstacle is that no analytic gradient of $f_{n,k
 \end{equation}
 where $u_{n,k} \sim \mathbb{S}^{d_n-1}$ is uniform and $\delta_k > 0$ is an exploration parameter. Since each yaw $\gamma_{n,k}$ is scalar, $d_n = 1$ and $u_{n,k} \in \{-1,+1\}$.
 
-\emph{Two-point estimator.} Moreover, we can also adopt a two-point bandit estimator, which normally yields better performance compared to the one-point bandit estimator~\cite{li2023survey}. Querying the current point and one perturbed point,
-\begin{equation} \label{eq:two-bandit}
-\begin{aligned}
-    \hat{g}_{n,k} := \frac{d_n}{\delta_k}
-    &\Big( f_{n,k}\!\left(\gamma_{n,k} + \delta_k u_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right) \\
-    &\quad - f_{n,k}\!\left(\gamma_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right)\Big)
-    u_{n,k}.
-\end{aligned}
+In our previous work, this gradient is estimated by fully using the low-fidelity steady-state map. However, the low-fidelity steady-state map is built on simplifying assumptions regarding external conditions and does not capture some important features. Thus, we adopt the multi-fidelity gradient estimator. This estimator seeks to combine the estimation of gradient from measurements obtained from high-fidelity dynamic environment and low-fidelity simulations.
+
+\begin{equation} \label{eq:mf-gradient}
+    \hat{g}_{n,k} = \hat{g}^{h}_{n,k} + c_{n,k}\big(\hat{g}^{l}_{n,k} - \mu^{l}_{n,k}\big).
 \end{equation}
-
-\emph{Central-difference estimator.} An alternative way to estimate the gradient, with the same bias but lower variance, is by adopting the central-difference formula, defined as:
-\begin{equation} \label{eq:cen-diff}
-\begin{aligned}
-    \hat{g}_{n,k} = \frac{1}{2\delta_k}\Big(
-        & f_{n,k}\!\left(\gamma_{n,k} + \delta_k,\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right) \\
-        & - f_{n,k}\!\left(\gamma_{n,k} - \delta_k,\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right)\Big)
-\end{aligned}
+in which,
+\begin{equation}
+    c_{n,k} := - \frac{Cov(\hat{g}^{h}_{n,k}, \hat{g}^{l}_{n,k})}{Var(\hat{g}^{l}_{n,k})}.     
 \end{equation}
+As you can see, this gradient estimator is unbiased but with reduced variance.
 
-Both two points estimators are unbiased for the gradient of the smoothed function $\hat{f}_{n,k,\delta}(\cdot) = \mathbb{E}_{w \sim B^{d_n}}[f_{n,k}(\cdot + \delta w)]$, where $B^{d_n}$ denotes the unit ball in $\mathbb{R}^{d_n}$; i.e., $\mathbb{E}[\hat{g}_{n,k}] = \nabla_{\gamma_n} \hat{f}_{n,k,\delta}$, and $\hat{f}_{n,k,\delta} \to f_{n,k}$ as $\delta_k \to 0$. The two-point estimator subtracts the zero-mean term $f_{n,k}(\gamma_{n,k}) u_{n,k}$, which acts as a control variate, while the central-difference estimator removes the probe-direction randomness altogether, so both reduce variance without introducing bias. However, the central-difference estimator requires one extra probe per turbine, raising the number of points required for computation per step from $N+1$ to $2N+1$. Moreover, to ensure the probe remains feasible, the probe is performed on a shrunk set (e.g., $(1-\xi_k)X_n$, $\xi_k \in (0,1)$)~\cite{yi2022regret}.
-
-\section{Algorithm} \label{sec:algorithm}
+\subsection{Proposed Algorithm} \label{sec:algorithm}
 In this section, we design the distributed online algorithm with bandit feedback gradient estimation. Based on Equation~\ref{eq:cost_sum}, the partial derivative of the $f_k$ with respect to $\gamma_{n,k}$ can be decomposed as
 \begin{equation}
     \frac{\partial f_k}{\partial \gamma_{n,k}}
@@ -41,84 +34,9 @@ In this section, we design the distributed online algorithm with bandit feedback
     + \sum_{m \in \mathcal{N}_n} \frac{\partial f_{m,k}}{\partial \gamma_{n,k}},
     \label{eq:coord}
 \end{equation}
-where $\sum_{m \in \mathcal{N}_n} \partial f_{m,k}/\partial \gamma_{n,k}$ represents the aggregate sensitivity of the neighboring turbines’ costs to the yaw action of FOWT$_n$, i.e., the wake-induced coupling. Each term in Equation~\ref{eq:coord} is estimated by the gradient estimator in Section~\ref{sec:gradest}: FOWT$_n$ estimates $\partial f_{n,k}/\partial \gamma_{N,K}$ by probing its own yaw, while $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$ estimates $\partial f_{m,k}/\partial \gamma_{n,k}$ by probing FOWT$_n$. 
+where $\sum_{m \in \mathcal{N}_n} \partial f_{m,k}/\partial \gamma_{n,k}$ represents the aggregate sensitivity of the neighboring turbines’ costs to the yaw action of FOWT$_n$, i.e., the wake-induced coupling. Each term in Equation~\ref{eq:coord} is estimated by the gradient estimator: FOWT$_n$ estimates $\partial f_{n,k}/\partial \gamma_{N,K}$ by probing its own yaw, while $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$ estimates $\partial f_{m,k}/\partial \gamma_{n,k}$ by probing FOWT$_n$. 
 
 As introduced, gradient estimation requires perturbing the physical systems randomly, which is impractical for real FOWFs. Therefore, to ensure practical feasibility, we design two algorithms based on the auxiliary tools that are used to acquire the gradient information: a low-fidelity method and a multi-fidelity method in the following chapter.
-
-\subsection{Low-Fidelity Method}
-In this method, we use a quasi-static low-fidelity simulator, the Floating Offshore Wind Farm Simulator (FOWFSim)~\cite{FOWFSim} (based on FLORIS and MoorPy), to probe the system to approximate the gradient, as Figure~\ref{fig:LF_BD} shows. It is important to note that this framework should be able to work when replacing the high-fidelity and low-fidelity models. The overall workflow is as follows. At each time step $k$, the high-fidelity dynamic simulator passes the relevant state information to the quasi-static low-fidelity simulator. Then, the gradient vector $\hat{G}_k$ is estimated, after which the vector that records optimal yaw angles $\Gamma_{k+1}$ is derived and returned to the high--fidelity simulator. The dynamic simulator updates the turbine states accordingly, and the process repeats. 
-
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=\linewidth]{overleaf/figures/LF_BD.png}
-    \caption{Structure of the proposed low-fidelity method at each time step $k$. Uppercase letters denote vectors.}
-    \label{fig:LF_BD}
-\end{figure}
-
-The proposed method is summarized in Algorithm~\ref{alg:doo}, in which $\mathcal{P}_{X_n}$ denotes the Euclidean projection onto $X_n$.
-\begin{algorithm}[h!]
-\caption{Low-Fidelity Method.}
-\label{alg:doo}
-\begin{algorithmic}
-    \STATE \textbf{Input:} stepsize $\{\alpha_k\}$; exploration $\{\delta_k\}$; shrinkage $\{\xi_k\} \subset (0,1)$ with $\delta_k \le r(X_n)\xi_k$.
-    \STATE \textbf{Initialize:} $\gamma_{n,1} \in (1-\xi_1)X_n$ for all $n \in [N]$ (one sign quadrant fixed).
-    \FOR{$k = 1, 2, \dots$}
-        \FOR{$n = 1, \dots, N$ (sequentially)}
-            \STATE Draw $u_{n,k} \in \{-1,+1\}$ uniformly at random; evaluate $f_{\kappa,k}$ at $\gamma_{n,k}$ and $\gamma_{n,k}+\delta_k u_{n,k}$ for all $\kappa\in\{n\}\cup\mathcal{N}_n$, keeping every other yaw fixed at its committed value;
-        \ENDFOR
-        \FOR{$n = 1, \dots, N$ in parallel}
-            \STATE Own partial estimate:
-            \begin{equation}
-                \hat{g}_{n,k}^{(n)} = \frac{u_{n,k}}{\delta_k}\Big(f_{n,k}(\gamma_{n,k}+\delta_k u_{n,k},\cdot) - f_{n,k}(\gamma_{n,k},\cdot)\Big);
-            \end{equation}
-            \STATE Receive cross-partial estimates from each $m \in \mathcal{N}_n$:
-            \begin{equation}
-                \hat{g}_{m,k}^{(n)} = \frac{u_{n,k}}{\delta_k}\big(f_{m,k}(\gamma_{n,k}+\delta_k u_{n,k},\cdot)-f_{m,k}(\gamma_{n,k},\cdot)\big);
-            \end{equation}
-            \STATE Assemble:
-            \begin{equation}
-                \hat{g}_{n,k} = \hat{g}_{n,k}^{(n)} + \sum_{m \in \mathcal{N}_n}\hat{g}_{m,k}^{(n)};   
-            \end{equation}
-            \STATE Update:
-            \begin{equation}
-                \gamma_{n,k+1} = \mathcal{P}_{(1-\xi_{k+1})X_n}\big(\gamma_{n,k} - \alpha_{k}\hat{g}_{n,k}\big);
-            \end{equation}
-        \ENDFOR
-    \ENDFOR
-    \STATE \textbf{Output:} $\{\gamma_{n,k}\}$.
-\end{algorithmic}
-\end{algorithm}
-
-\subsection{Multi-Fidelity Method}
-The previous method purely relies on a low-fidelity simulator that is built on simplifying assumptions about the external environmental conditions and only captures the steady-state wake dynamics. However, the real wind farm is dynamic, and a controller optimized purely on such a low-fidelity model cannot bridge the sim-to-real gap. To retain the sample efficiency of the low-fidelity simulator while anchoring the estimate to the true dynamics, we adopt a multi-fidelity framework~\cite{peherstorfer2018survey}. Specifically, we implement the fusion via the control variate method. 
-
-Let $\hat{g}^{h}_{n,k}$ and $\hat{g}^{l}_{n,k}$ denote the gradient estimates of FOWT$_n$ obtained from the high-fidelity (dynamic) simulator and the low-fidelity (quasi-static) simulator, respectively, using the gradient estimator in Section~\ref{sec:gradest}. The two estimates are made correlated by probing both simulators with the same perturbation direction $u_{n,k}$ and by initializing the low-fidelity simulator at the current high-fidelity state.
-
-The key difficulty in a dynamic, non-stationary environment is that the high-fidelity probes are spread across consecutive time steps: the base measurement is taken at instant $\tau_0$ under inflow $w_0$, while the probe of FOWT$_n$ is taken at a later instant $\tau_i$ under inflow $w_i$. A naive high-fidelity difference therefore mixes the yaw effect with the environmental drift $w_i - w_0$. To remove this drift, we probe both fidelities \emph{jointly}: at every high-fidelity query instant we also evaluate the low-fidelity model at the \emph{same} time, wind, and yaw, using the \emph{same} perturbation direction $u_{n,k}$. For the own partial of FOWT$_n$ this yields three estimates:
-\begin{equation} \label{eq:mf-drifted}
-\begin{aligned}
-\hat{g}^{h}_{n,k} &= \frac{u_{n,k}}{\delta_k}\big(f^{h}(\gamma_{n,k}+\delta_k u_{n,k},\,w_i) - f^{h}(\gamma_{n,k},\,w_0)\big),\\
-\hat{g}^{l}_{n,k} &= \frac{u_{n,k}}{\delta_k}\big(f^{l}(\gamma_{n,k}+\delta_k u_{n,k},\,w_i) - f^{l}(\gamma_{n,k},\,w_0)\big),\\
-\hat{g}^{l,\mathrm{cln}}_{n,k} &= \frac{u_{n,k}}{\delta_k}\big(f^{l}(\gamma_{n,k}+\delta_k u_{n,k},\,w_0) - f^{l}(\gamma_{n,k},\,w_0)\big),
-\end{aligned}
-\end{equation}
-where $\hat{g}^{l,\mathrm{cln}}_{n,k}$ is the clean, synchronous low-fidelity gradient (both probes evaluated under $w_0$, while $\hat{g}^{l}_{n,k}$ is the \emph{drifted} low-fidelity gradient computed over the same two instants as $\hat{g}^{h}_{n,k}$. The fused estimate takes the low-fidelity gradient as the anchor and the high-minus-low difference as a correction:
-\begin{equation} \label{eq:mf-gradient}
-    \hat{g}_{n,k} = \hat{g}^{l,\mathrm{cln}}_{n,k} + c_{n,k}\big(\hat{g}^{h}_{n,k} - \hat{g}^{l}_{n,k}\big).
-\end{equation}
-Because the environmental drift contaminates $\hat{g}^{h}_{n,k}$ and $\hat{g}^{l}_{n,k}$ alike, it cancels in the difference, so the correction retains only the high-fidelity yaw effect. With $c_{n,k}\to 1$ the fused estimate is unbiased toward the high-fidelity gradient, while when the correction is small it degrades gracefully to the low-fidelity behavior alone.
-
-Let $A_{n,k} := \hat{g}^{l,\mathrm{cln}}_{n,k}$ denote the anchor and $D_{n,k} := \hat{g}^{h}_{n,k} - \hat{g}^{l}_{n,k}$ the drift-free correction, so that $\hat{g}_{n,k} = A_{n,k} + c_{n,k} D_{n,k}$. The variance of the fused estimate is $\mathrm{Var}(A_{n,k}) + c_{n,k}^2 \mathrm{Var}(D_{n,k}) + 2 c_{n,k}\mathrm{Cov}(A_{n,k}, D_{n,k})$, which is minimized by
-\begin{equation} \label{eq:mf-cv}
-    c^{*}_{n,k} = -\frac{\mathrm{Cov}(A_{n,k},\,D_{n,k})}{\mathrm{Var}(D_{n,k})}
-    = -\frac{\mathrm{Cov}(\hat{g}^{l,\mathrm{cln}}_{n,k},\,\hat{g}^{h}_{n,k}-\hat{g}^{l}_{n,k})}{\mathrm{Var}(\hat{g}^{h}_{n,k}-\hat{g}^{l}_{n,k})}.
-\end{equation}
-In practice, $c^{*}_{n,k}$ is estimated online from the stream of anchor--correction pairs $(A_{n,k},\,D_{n,k})$ using sample statistics, maintained across time steps with an exponential moving average of the moments $\mathbb{E}[A D]$, $\mathbb{E}[A]$, $\mathbb{E}[D]$, and $\mathbb{E}[D^2]$~\cite{liu2025multi}. The coefficient is initialized to $c_{n,1}=0$ (low-fidelity only) and clamped to $[0,1]$, so that $c=0$ recovers the low-fidelity estimate and $c=1$ the drift-corrected high-fidelity estimate. The fusion in Equation~\ref{eq:mf-gradient} is applied to each partial gradient term in Equation~\ref{eq:coord} before they are assembled, and the low-fidelity correction is evaluated at the \emph{measurement} time of each high-fidelity probe so that the drift remains common-mode and cancels. 
-\begin{itemize}
-    \item \textcolor{purple}{Maybe I should try one-point estimation to match the time?}
-    \item \textcolor{purple}{How to combine a steady-state map with dynamic data?}
-\end{itemize}
-
 
 \begin{algorithm}
 \caption{Multi-Fidelity Method.}

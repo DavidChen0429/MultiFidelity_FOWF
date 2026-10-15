@@ -18,14 +18,7 @@ Since FOWT$_n$ and its neighbors $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$ are a
 where $\Gamma_k = (\gamma_{1,k}, \gamma_{2,k}, \dots, \gamma_{N,k})$ denotes the vector of yaw angles of all turbines at time step $k$. According to \eqref{eq:cost_def}, $f_{n,k}$ decreases as the power output of FOWT$_n$ increases. Therefore, minimizing $f_k(\Gamma_k)$ is equivalent to maximizing the total normalized power output of the wind farm, thereby improving farm-level performance.
 
 \subsection{Problem Formulation}
-Based on the above definition, we formulate the problem under a multi-agent coordination-based distributed online optimization framework: at each time step $k \geq 1$, FOWT$_n$ makes a control action $\gamma_{n,k}$ based on information of its own and $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$, which includes $f_{n,\ell}, \gamma_{m,\ell}, \gamma_{n,\ell}$ with $\ell\leq k-1$. Subsequently, the environment reveals $f_{n,k}\!\left(\gamma_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right)$. Each turbine then shares its information with its neighbor, and the process repeats at every time step until a pre-specified horizon $T>0$ is reached. Figure~\ref{fig:BD} shows the corresponding block diagram. 
-
-\begin{figure}[h!]
-    \centering
-    \includegraphics[width=\linewidth]{overleaf/figures/BD.png}
-    \caption{Block diagram showing the architecture of the designed distributed online optimization-based control system.}
-    \label{fig:BD}
-\end{figure}
+Based on the above definition, we formulate the problem under a multi-agent coordination-based distributed online optimization framework: at each time step $k \geq 1$, FOWT$_n$ makes a control action $\gamma_{n,k}$ based on information of its own and $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$, which includes $f_{n,\ell}, \gamma_{m,\ell}, \gamma_{n,\ell}$ with $\ell\leq k-1$. Subsequently, the environment reveals $f_{n,k}\!\left(\gamma_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right)$. Each turbine then shares its information with its neighbor, and the process repeats at every time step until a pre-specified horizon $T>0$ is reached.
 
 Assume the maximum yaw angle is denoted by $\gamma_{\max}$ and let $X_n=\{\gamma : |\gamma| \le \gamma_{\max}\}$ denote the feasible set of FOWT$_n$. Therefore, the corresponding objective of the problem is to minimize the following cumulative cost:
 \begin{equation} \label{eq:opti2}
