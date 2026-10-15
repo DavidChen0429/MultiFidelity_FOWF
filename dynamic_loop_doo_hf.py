@@ -83,7 +83,7 @@ run_dir  = os.path.join(DATA_DIR, run_name)             # e.g. "dynamic_Data/war
 os.makedirs(run_dir, exist_ok=True)
 
 
-def distributed_doo_step_hf_one_point_bandit(agents, alpha, delta, xi, us, c_probe):
+def distributed_doo_step_hf(agents, alpha, delta, xi, us, c_probe):
     '''Assemble the one-point bandit gradient from high-fidelity cost samples and
     update the per-turbine yaws.
 
@@ -198,7 +198,7 @@ class HFBanditController:
 
         # last probe just measured -> assemble gradient and update, then start next cycle
         alpha = self.alpha0 / np.sqrt(self.k + 1.0)
-        gamma_new, grad = distributed_doo_step_hf_one_point_bandit(
+        gamma_new, grad = distributed_doo_step_hf(
             self.agents, alpha, self.delta, self.xi, self.us, self.c_probe,
         )
         self.last_grad = grad

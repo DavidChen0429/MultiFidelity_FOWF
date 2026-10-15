@@ -49,14 +49,14 @@ As introduced, gradient estimation requires perturbing the physical systems rand
             \STATE Draw $u_{n,k} \in \{-1,+1\}$ uniformly at random; evaluate $f_{\kappa,k}$ at $\gamma_{n,k}$ and $\gamma_{n,k}+\delta_k u_{n,k}$ for all $\kappa\in\{n\}\cup\mathcal{N}_n$, keeping every other yaw fixed at its committed value;
         \ENDFOR
         \FOR{$n = 1, \dots, N$ in parallel}
-            \STATE At each high-fidelity query instant, evaluate the low-fidelity model at the same time.
-            \STATE Own partial estimate via the fused gradient in Eq.~\eqref{eq:mf-gradient}:
+            \STATE At each high-fidelity query instant, evaluate the low-fidelity model at the same time/wind/yaw with the same perturbation direction $u_{n,k}$, and estimate the low-fidelity gradient mean $\mu^{l(n)}_{\kappa,k}$ from a batch of cheap low-fidelity probes.
+            \STATE Own partial estimate via the high-fidelity-anchored fused gradient in Eq.~\eqref{eq:mf-gradient}:
             \begin{equation}
-                \hat{g}_{n,k}^{(n)} = \hat{g}^{l,\mathrm{cln}(n)}_{n,k} + c_{n,k}\big(\hat{g}^{h(n)}_{n,k} - \hat{g}^{l(n)}_{n,k}\big);
+                \hat{g}_{n,k}^{(n)} = \hat{g}^{h(n)}_{n,k} + c_{n,k}\big(\hat{g}^{l(n)}_{n,k} - \mu^{l(n)}_{n,k}\big);
             \end{equation}
             \STATE Receive cross-partial estimates from each $m \in \mathcal{N}_n$, fused analogously:
             \begin{equation}
-                \hat{g}_{m,k}^{(n)} = \hat{g}^{l,\mathrm{cln}(n)}_{m,k} + c_{n,k}\big(\hat{g}^{h(n)}_{m,k} - \hat{g}^{l(n)}_{m,k}\big);
+                \hat{g}_{m,k}^{(n)} = \hat{g}^{h(n)}_{m,k} + c_{n,k}\big(\hat{g}^{l(n)}_{m,k} - \mu^{l(n)}_{m,k}\big);
             \end{equation}
             \STATE Assemble:
             \begin{equation}

@@ -92,7 +92,6 @@ DELTA     = 2.0                                # exploration delta_t (deg)
 XI        = 0.1                                # shrinkage xi_t -> effective bound 27 deg
 ALPHA0    = 10.0                               # base stepsize alpha_0 (deg^2) -- TUNE ME (one-point bandit)
 WARM_START = True                              # True -> warm-start quasi-static solver from baseline layout
-GRAD_ESTIMATOR = "one_point_bandit"            # one-point bandit estimator (only estimator implemented)
 
 # adjacency: turbine i is coupled to its up/down-stream neighbors i-2, i-1, i+1, i+2
 NEIGHBORS = [
@@ -136,22 +135,9 @@ snapshot_dir = os.path.join(run_dir, "quasi-static-snapshot")
 os.makedirs(snapshot_dir, exist_ok=True)
 
 
-def distributed_doo_step_one_point_bandit(agents, SI, P_rate, alpha, delta, xi, gamma_max, rng, warm_start=True):
-    '''One iteration of Algorithm 1 with the one-point bandit estimator and
-    per-turbine agents with neighbor messaging.
-
-    Implements the one-point estimator of Eq.~(one-bandit): each turbine is probed
-    once at gamma_i + delta*u_i and its gradient partials are formed directly from
-    the probe cost, without subtracting the committed-point cost,
-        g_i = (1/delta) * f_i(gamma + delta*u_i) * u_i,
-    with the cross-partials estimated analogously by the neighbors. Since no base
-    query is needed, this requires only N quasi-static evaluations per step (one
-    probe per turbine), the fewest of the three estimators. The price is a
-    higher-variance estimate (the O(1) cost offset is no longer cancelled by the
-    base subtraction), though it remains unbiased for the smoothed objective.
-
-    Each agent owns its own yaw; cross-partials df_j/dgamma_i are computed by the
-    neighbor j and passed to agent i, so every update uses only local + neighbor info.
+def distributed_doo_step_lf(agents, SI, P_rate, alpha, delta, xi, gamma_max, rng, warm_start=True):
+    ''' One-point bandit gradient estimator:
+            g_i = (1/delta) * f_i(gamma + delta*u_i) * u_i,
 
     Parameters
     ----------
@@ -178,18 +164,18 @@ def distributed_doo_step_one_point_bandit(agents, SI, P_rate, alpha, delta, xi, 
         return -SI.get_powers().squeeze() / P_rate
 
     N = len(agents)
-    gamma = np.array([a.gamma for a in agents])   # gather committed yaws (for the oracle only)
+    gamma = np.array([a.gamma for a in agents])     # gather committed yaws (for the oracle only)
 
     base_layout = SI.warm_layout.copy() if warm_start else None   # seed layout (measured reality)
 
     # ---- sequential probe phase (one probe per turbine, no base query) ----
-    c_probe = {}                                  # i -> cost vector at (gamma_i + delta*u_i, gamma_{-i})
-    us      = {}
-    for a in agents:
+    c_probe = {}                                    # i -> cost vector at (gamma_i + delta*u_i, gamma_{-i})
+    us      = {}                                    # probe direction
+    for a in agents:                                # Sequentially probe all turbines
         u = 1.0 if rng.uniform() < 0.5 else -1.0    # Rademacher probe direction (+1 / -1)
         gp = gamma.copy()
         gp[a.idx] = np.clip(a.gamma + delta * u, -gamma_max, gamma_max)  # perturb only turbine i
-        c_probe[a.idx] = cost(gp, initial_layout=base_layout)
+        c_probe[a.idx] = cost(gp, initial_layout=base_layout)            # cost of the entire FOWF         
         us[a.idx] = u
 
     # ---- message passing: own partial + cross-partials from neighbors ----
@@ -209,10 +195,6 @@ def distributed_doo_step_one_point_bandit(agents, SI, P_rate, alpha, delta, xi, 
 
     return np.array([a.gamma for a in agents]), grad, None
 
-# --- Dispatch table: only the one-point bandit estimator is implemented ---
-GRAD_ESTIMATORS = {
-    "one_point_bandit":   distributed_doo_step_one_point_bandit,
-}
 
 # --- Simulation loop ---
 results = []
@@ -293,7 +275,7 @@ for t in range(max_iter):
 
     alpha_t = ALPHA0 / np.sqrt(t + 1.0)        # decaying stepsize (t 0-indexed)
     t0 = time.perf_counter()
-    gamma, grad, qs_cost = GRAD_ESTIMATORS[GRAD_ESTIMATOR](
+    gamma, grad, qs_cost = distributed_doo_step_lf(
         AGENTS, SI, P_rate, alpha_t, DELTA, XI, GAMMA_MAX, rng, WARM_START,
     )
     for i in range(n_turbines):
