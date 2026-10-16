@@ -15,7 +15,7 @@ from ffconnect.interface import FastFarmInterface
 YAW_BOUND    = 30.0                       # yaw limit (deg) — a control bound, not a dynamic-case value
 P_RATED_PER_TURBINE = 5.0e6               # rated power per turbine [W] (NREL 5-MW baseline)
 
-
+    
 class TurbineAgent:
     '''Local state for one turbine: owns its own yaw and its own feasible box.'''
     def __init__(self, idx, neighbors, x_lo, x_hi, gamma=0.0):
@@ -86,13 +86,6 @@ os.makedirs(run_dir, exist_ok=True)
 def distributed_doo_step_hf(agents, alpha, delta, xi, us, c_probe):
     '''Assemble the one-point bandit gradient from high-fidelity cost samples and
     update the per-turbine yaws.
-
-    This is the message-passing + projected-update tail of Algorithm 1: each agent
-    estimates its own partial derivative plus the cross-partials reported by its
-    neighbors, then takes a projected gradient step. The probe cost vectors
-    ``c_probe`` come from the high-fidelity dynamic simulator (collected over ``N``
-    consecutive ``interface.step()`` calls by ``HFBanditController``), so this function
-    never touches a simulator.
 
     The one-point estimator never queries the committed point; each partial is formed
     directly from the probe cost,
@@ -169,7 +162,7 @@ class HFBanditController:
         '''Yaw vector that probes turbine i alone, relative to the committed gamma.'''
         gamma = self._gamma()
         gp = gamma.copy()
-        gp[i] = np.clip(gamma[i] + self.delta * self.us[i], -self.gamma_max, self.gamma_max)
+        gp[i] = np.clip(gamma[i] + self.delta * self.us[i], -self.gamma_max, self.gamma_max)        # perturb only one turbine
         return gp
 
     def _issue_probe(self, i):

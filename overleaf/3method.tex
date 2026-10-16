@@ -4,68 +4,72 @@ This section formulates the methodology.
 \subsection{Gradient Flow Analysis} \label{sec:gradientAnalysis}
 
 \subsection{Multi-Fidelity Gradient Estimation} \label{sec:mf-gradient}
-As previously analyzed, one big obstacle is that no analytic gradient of $f_{n,k}$ is available. Hence, gradients must be estimated from sampling data alone. We adopt the one-point bandit estimator for its simplicity, and the two-point bandit estimator for its lower variance, and briefly contrast it with the central-difference estimator.
+As previously analyzed, no analytic gradient of $f_{n,k}$ is available, so the gradient must be estimated from sampling data alone. We pair two estimators according to the cost of their underlying oracles: a one-point bandit estimator for the high-fidelity dynamic model, whose evaluations are expensive, and a deterministic two-point estimator for the low-fidelity quasi-static model, whose evaluations are cheap.
 
-\emph{One-point estimator.} Querying the current point,
-\begin{equation} \label{eq:one-bandit}
-\begin{aligned}
-    \hat{g}_{n,k} := \frac{d_n}{\delta_k}
-    &\Big( f_{n,k}\!\left(\gamma_{n,k} + \delta_k u_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right) \Big)u_{n,k},
-\end{aligned}
-\end{equation}
-where $u_{n,k} \sim \mathbb{S}^{d_n-1}$ is uniform and $\delta_k > 0$ is an exploration parameter. Since each yaw $\gamma_{n,k}$ is scalar, $d_n = 1$ and $u_{n,k} \in \{-1,+1\}$.
-
-In our previous work, this gradient is estimated by fully using the low-fidelity steady-state map. However, the low-fidelity steady-state map is built on simplifying assumptions regarding external conditions and does not capture some important features. Thus, we adopt the multi-fidelity gradient estimator. This estimator seeks to combine the estimation of gradient from measurements obtained from high-fidelity dynamic environment and low-fidelity simulations.
-
-\begin{equation} \label{eq:mf-gradient}
-    \hat{g}_{n,k} = \hat{g}^{h}_{n,k} + c_{n,k}\big(\hat{g}^{l}_{n,k} - \mu^{l}_{n,k}\big).
-\end{equation}
-in which,
-\begin{equation}
-    c_{n,k} := - \frac{Cov(\hat{g}^{h}_{n,k}, \hat{g}^{l}_{n,k})}{Var(\hat{g}^{l}_{n,k})}.     
-\end{equation}
-As you can see, this gradient estimator is unbiased but with reduced variance.
-
-\subsection{Proposed Algorithm} \label{sec:algorithm}
-In this section, we design the distributed online algorithm with bandit feedback gradient estimation. Based on Equation~\ref{eq:cost_sum}, the partial derivative of the $f_k$ with respect to $\gamma_{n,k}$ can be decomposed as
+Based on \eqref{eq:cost_sum}, the partial derivative of $f_k$ with respect to $\gamma_{n,k}$ decomposes into an own term and a set of coupling terms,
 \begin{equation}
     \frac{\partial f_k}{\partial \gamma_{n,k}}
     = \frac{\partial f_{n,k}}{\partial \gamma_{n,k}}
     + \sum_{m \in \mathcal{N}_n} \frac{\partial f_{m,k}}{\partial \gamma_{n,k}},
     \label{eq:coord}
 \end{equation}
-where $\sum_{m \in \mathcal{N}_n} \partial f_{m,k}/\partial \gamma_{n,k}$ represents the aggregate sensitivity of the neighboring turbines’ costs to the yaw action of FOWT$_n$, i.e., the wake-induced coupling. Each term in Equation~\ref{eq:coord} is estimated by the gradient estimator: FOWT$_n$ estimates $\partial f_{n,k}/\partial \gamma_{N,K}$ by probing its own yaw, while $\{\text{FOWT}_m\}_{m \in \mathcal{N}_n}$ estimates $\partial f_{m,k}/\partial \gamma_{n,k}$ by probing FOWT$_n$. 
+where $\sum_{m \in \mathcal{N}_n} \partial f_{m,k}/\partial \gamma_{n,k}$ represents the aggregate sensitivity of the neighboring turbines' costs to the yaw action of FOWT$_n$, i.e., the wake-induced coupling. We assign each term to the fidelity that can estimate it reliably.
 
-As introduced, gradient estimation requires perturbing the physical systems randomly, which is impractical for real FOWFs. Therefore, to ensure practical feasibility, we design two algorithms based on the auxiliary tools that are used to acquire the gradient information: a low-fidelity method and a multi-fidelity method in the following chapter.
+\emph{One-point bandit estimator (high fidelity).} Querying a single perturbed point,
+\begin{equation} \label{eq:one-bandit}
+    \hat{g}_{n,k} := \frac{1}{\delta_k} f_{n,k}\!\left(\gamma_{n,k}+\delta_k u_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n}\right) u_{n,k},
+\end{equation}
+where $u_{n,k} \in \{-1,+1\}$ is drawn uniformly at random and $\delta_k > 0$ is an exploration parameter. Since each yaw $\gamma_{n,k}$ is scalar, no sphere sampling is required, and the committed point is never queried.
+
+\emph{Two-point estimator (low fidelity).} Because low-fidelity evaluations are inexpensive, the low-fidelity gradient is formed by a deterministic central difference that removes the one-point sampling variance,
+\begin{equation} \label{eq:two-point}
+    \hat{g}^{l}_{n,k} := \frac{1}{2\delta_k}\Big( f^{l}_{n,k}(\gamma_{n,k}+\delta_k) - f^{l}_{n,k}(\gamma_{n,k}-\delta_k) \Big),
+\end{equation}
+keeping every other yaw fixed at its committed value.
+
+\emph{Wake-convection delay and dwell time.} In a dynamic high-fidelity model, perturbing the yaw of FOWT$_m$ does not reach a downstream FOWT$_n$ instantaneously: the modified wake must first convect over the turbine spacing. This wake-convection delay is
+\begin{equation} \label{eq:tau-conv}
+    \tau_{\text{conv}} \approx \frac{d_{m,n}}{\bar{u}},
+\end{equation}
+where $d_{m,n}$ is the streamwise turbine spacing and $\bar{u}$ the wake-advection speed. We dwell on each perturbation for a time $D$ selected so that the local (own) response has settled while the cross response has not yet arrived,
+\begin{equation} \label{eq:dwell}
+    T_{\text{settle}} < D < \tau_{\text{conv}}.
+\end{equation}
+Within this window the own power of FOWT$_n$ reflects only its own yaw perturbation. Hence, if all turbines are perturbed \emph{simultaneously}, the own response of FOWT$_n$ is identical to the case in which only $\gamma_{n,k}$ is perturbed, since the neighboring perturbations have not yet reached FOWT$_n$. This observation is the key enabler of the proposed estimator: the delayed cross response, which precludes a direct high-fidelity estimate of the coupling, is precisely what renders the simultaneous own-response probe clean.
+
+\emph{Per-term multi-fidelity estimator.} The own term $\partial f_{n,k}/\partial\gamma_{n,k}$ is estimated from the high-fidelity dynamic model via the simultaneous one-point probe, whereas each coupling term $\partial f_{m,k}/\partial\gamma_{n,k}$, $m\in\mathcal{N}_n$, is estimated from the low-fidelity quasi-static model via the deterministic two-point estimator. The resulting multi-fidelity estimator is
+\begin{equation} \label{eq:mf-gradient}
+    \hat{g}_{n,k} = \hat{g}^{h}_{n,n,k} + \sum_{m\in\mathcal{N}_n}\hat{g}^{l}_{m,n,k},
+\end{equation}
+where, following \eqref{eq:one-bandit} and \eqref{eq:two-point},
+\begin{equation} \label{eq:own-hf}
+    \hat{g}^{h}_{n,n,k} = \frac{1}{\delta_k} f^{h}_{n,k}\!\left(\gamma_{n,k}+\delta_k u_{n,k},\,\{\gamma_{m,k}\}_{m\in\mathcal{N}_n};\,D\right) u_{n,k},
+\end{equation}
+\begin{equation} \label{eq:cross-lf}
+    \hat{g}^{l}_{m,n,k} = \frac{1}{2\delta_k}\Big( f^{l}_{m,k}(\gamma_{n,k}+\delta_k) - f^{l}_{m,k}(\gamma_{n,k}-\delta_k) \Big).
+\end{equation}
+Here the superscripts $h$ and $l$ denote the high- and low-fidelity models, and $f^{h}_{n,k}(\cdot\,;D)$ denotes the high-fidelity power measured after the dwell $D$. This estimator is biased only by the $O(\delta_k^2)$ finite-difference error and by the low-fidelity modeling error of the coupling terms, under the standing assumption
+\begin{equation} \label{eq:coupling-assumption}
+    \frac{\partial f^{l}_{m,k}}{\partial\gamma_{n,k}} \approx \frac{\partial f^{h}_{m,k}}{\partial\gamma_{n,k}}, \qquad m\in\mathcal{N}_n.
+\end{equation}
+Unlike a variance-reducing control variate, the low-fidelity model is not merely a correction to the high-fidelity estimate; it supplies the coupling terms that the dynamic model cannot provide within the dwell window.
+
+\subsection{Proposed Algorithm} \label{sec:algorithm}
+We now design the distributed online algorithm with multi-fidelity bandit feedback. To ensure practical feasibility, perturbation and gradient estimation are coordinated as follows. At each time step $k$, all turbines are perturbed simultaneously by $\Gamma_k + \delta_k u_k$, and each turbine measures its own power after the dwell $D$ to form the high-fidelity own-partial estimate~\eqref{eq:own-hf}. Concurrently, each FOWT$_n$ evaluates the farm-wide low-fidelity model by perturbing only its own yaw and reading the coupling-term costs $\{f^{l}_{m,k}\}_{m\in\mathcal{N}_n}$ from the resulting low-fidelity cost vector, yielding the cross-partial estimates~\eqref{eq:cross-lf} without any high-fidelity cross-measurement. The own and coupling partials are then assembled as in \eqref{eq:mf-gradient}.
 
 \begin{algorithm}
 \caption{Cooperative Distributed Online Feedback Optimization Based on Multi-Fidelity Gradient Estimator.}
 \label{alg:doo-mf}
 \begin{algorithmic}
-    \STATE \textbf{Input:} stepsize $\{\alpha_k\}$; exploration $\{\delta_k\}$; shrinkage $\{\xi_k\} \subset (0,1)$ with $\delta_k \le r(X_n)\xi_k$.
+    \STATE \textbf{Input:} stepsize $\{\alpha_k\}$; exploration $\{\delta_k\}$; shrinkage $\{\xi_k\} \subset (0,1)$ with $\delta_k \le r(X_n)\xi_k$; dwell $D$ with $T_{\text{settle}} < D < \tau_{\text{conv}}$.
     \STATE \textbf{Initialize:} $\gamma_{n,1} \in (1-\xi_1)X_n$ for all $n \in [N]$ (one sign quadrant fixed).
     \FOR{$k = 1, 2, \dots$}
-        \FOR{$n = 1, \dots, N$ (sequentially)}
-            \STATE Draw $u_{n,k} \in \{-1,+1\}$ uniformly at random; evaluate $f_{\kappa,k}$ at $\gamma_{n,k}$ and $\gamma_{n,k}+\delta_k u_{n,k}$ for all $\kappa\in\{n\}\cup\mathcal{N}_n$, keeping every other yaw fixed at its committed value;
-        \ENDFOR
+        \STATE Draw $u_k=(u_{1,k},\dots,u_{N,k}) \in \{-1,+1\}^N$ uniformly at random; command all turbines to $\Gamma_k+\delta_k u_k$ simultaneously and dwell for $D$.
         \FOR{$n = 1, \dots, N$ in parallel}
-            \STATE At each high-fidelity query instant, evaluate the low-fidelity model at the same time/wind/yaw with the same perturbation direction $u_{n,k}$, and estimate the low-fidelity gradient mean $\mu^{l(n)}_{\kappa,k}$ from a batch of cheap low-fidelity probes.
-            \STATE Own partial estimate via the high-fidelity-anchored fused gradient in Eq.~\eqref{eq:mf-gradient}:
-            \begin{equation}
-                \hat{g}_{n,k}^{(n)} = \hat{g}^{h(n)}_{n,k} + c_{n,k}\big(\hat{g}^{l(n)}_{n,k} - \mu^{l(n)}_{n,k}\big);
-            \end{equation}
-            \STATE Receive cross-partial estimates from each $m \in \mathcal{N}_n$, fused analogously:
-            \begin{equation}
-                \hat{g}_{m,k}^{(n)} = \hat{g}^{h(n)}_{m,k} + c_{n,k}\big(\hat{g}^{l(n)}_{m,k} - \mu^{l(n)}_{m,k}\big);
-            \end{equation}
-            \STATE Assemble:
-            \begin{equation}
-                \hat{g}_{n,k} = \hat{g}_{n,k}^{(n)} + \sum_{m \in \mathcal{N}_n}\hat{g}_{m,k}^{(n)};   
-            \end{equation}
-            \STATE Update:
-            \begin{equation}
-                \gamma_{n,k+1} = \mathcal{P}_{(1-\xi_{k+1})X_n}\big(\gamma_{n,k} - \alpha_{k}\hat{g}_{n,k}\big);
-            \end{equation}
+            \STATE Measure own power after the dwell; form the own-partial estimate $\hat{g}^{h}_{n,n,k}$ via \eqref{eq:own-hf}.
+            \STATE For each $m \in \mathcal{N}_n$, evaluate the low-fidelity model at $\gamma_{n,k} \pm \delta_k$ (all other yaws fixed); form the coupling-partial estimate $\hat{g}^{l}_{m,n,k}$ via \eqref{eq:cross-lf}.
+            \STATE Assemble the multi-fidelity gradient $\hat{g}_{n,k} = \hat{g}^{h}_{n,n,k} + \sum_{m \in \mathcal{N}_n}\hat{g}^{l}_{m,n,k}$.
+            \STATE Update $\gamma_{n,k+1} = \mathcal{P}_{(1-\xi_{k+1})X_n}\big(\gamma_{n,k} - \alpha_{k}\hat{g}_{n,k}\big)$.
         \ENDFOR
     \ENDFOR
     \STATE \textbf{Output:} $\{\gamma_{n,k}\}$.
